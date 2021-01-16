@@ -1,8 +1,11 @@
 import json
 import metsuke
+import os
 import shikyou
+import signal
 import subprocess
 import rabbitpy
+import sys
 import tempfile
 import time
 
@@ -10,6 +13,19 @@ from ayumi import Ayumi
 from config import settings
 from pathlib import Path
 from retry import retry
+
+# Signal handler
+
+
+def sig_handler(sig, frame):
+    Ayumi.warning("SIG command {} detected, exiting...".format(
+        sig), color=Ayumi.LRED)
+    sys.exit()
+
+
+# Add in SIGKILL handler
+signal.signal(signal.SIGINT, sig_handler)
+signal.signal(signal.SIGTERM, sig_handler)
 
 @retry(delay=60, backoff=1.5, max_delay=3600, logger=Ayumi.get_logger())
 def consume():
@@ -22,7 +38,7 @@ def consume():
             vhost=settings.get('RABBITMQ_VHOST')
         )) as conn:
             with conn.channel() as channel:
-
+                channel.enable_publisher_confirms()
                 Ayumi.set_rabbitpy_channel(channel)
                 queue = rabbitpy.Queue(channel, settings.get('TEMPEST_RABBITMQ_QUEUE'))
                 queue.declare(passive=True)
@@ -69,7 +85,7 @@ def consume():
                                         "subtitles={}:force_style='FontName=Open Sans Semibold:fontsdir=/opt/fonts'".format(temp_abspath),
                                         "-c:a", "copy",
                                         tempdir + "/temp.mp4"]
-                                Ayumi.debug("Executing encode command: {}".format(encode_command))
+                                Ayumi.info("Executing encode command: {}".format(encode_command))
                                 subprocess.run(encode_command)
                                 shikyou.upload(metsuke_job_hard, settings.get("TEMPEST_RCLONE_UPLOAD_DESTS"), tempdir + "/temp.mp4", rconf.name, settings.get("RCLONE_FLAGS", ""))
 
@@ -81,6 +97,23 @@ def consume():
                                 Ayumi.warning("Rclone timed out whilhe executing, nacking.", color=Ayumi.RED)
                                 message.nack()
                                 continue
+
+                            try:
+                                job = {
+                                    "show": metsuke_job_hard.show,
+                                    "episode": metsuke_job_hard.episode,
+                                    "filesize": os.path.getsize(tempdir + "/temp.mp4"),
+                                    "sub": "hardsub"
+                                }
+                                pub_msg = rabbitpy.Message(channel, job)
+                                if pub_msg.publish(settings.get('TEMPEST_PUBLISH_EXCHANGE')):
+                                    Ayumi.info("Job successfully published to RabbitMQ", color=Ayumi.LGREEN)
+                                else:
+                                    Ayumi.warning("Job unsuccessfully published to RabbitMQ", color=Ayumi.LRED)
+                                    raise Exception()
+                            except:
+                                Ayumi.warning("Job unsuccessfully published to RabbitMQ", color=Ayumi.LRED)
+                                raise Exception()
 
                     Ayumi.info("Completed processing this message for {}".format(job['episode']), color=Ayumi.LGREEN)
                     message.ack()
