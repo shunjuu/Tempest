@@ -78,13 +78,22 @@ def consume():
                             try:
                                 temp = Path(shikyou.download(metsuke_job, settings.get('TEMPEST_RCLONE_DOWNLOAD_SOURCES'), tempdir, rconf.name, settings.get("RCLONE_FLAGS", "")))
                                 temp_abspath = str(temp.resolve())
-                                encode_command = ["ffmpeg",
+                                encode_command = [
+                                        "ffmpeg",
                                         "-i",
                                         temp_abspath,
                                         "-vf",
-                                        "subtitles={}:force_style='FontName=Open Sans Semibold:fontsdir=/opt/fonts'".format(temp_abspath),
-                                        "-c:a", "copy",
-                                        tempdir + "/temp.mp4"]
+                                        "subtitles={}:force_style='FontName=Open Sans Semibold:fontsdir=/opt/fonts'".format(temp_abspath)
+                                        ]
+
+                                # Get the string of flags user provided in config, or default to empty string
+                                user_ffmpeg_flags = settings.get('TEMPEST_FFMPEG_ENCODE_FLAGS', "").split(" ")
+                                for flag in user_ffmpeg_flags:
+                                    if flag:
+                                        encode_command.append(flag)
+
+                                encode_command.append(tempdir + "/temp.mp4")
+
                                 Ayumi.info("Executing encode command: {}".format(encode_command))
                                 subprocess.run(encode_command)
                                 shikyou.upload(metsuke_job_hard, settings.get("TEMPEST_RCLONE_UPLOAD_DESTS"), tempdir + "/temp.mp4", rconf.name, settings.get("RCLONE_FLAGS", ""))
